@@ -123,3 +123,9 @@ The library depends only on the Go standard library.
    biggest gap in the window; a window with no gap is cut at its bottom
    boundary.
 4. The image is cut at the chosen rows.
+
+---
+
+## License
+
+[MIT](LICENSE)
