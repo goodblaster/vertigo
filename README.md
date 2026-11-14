@@ -69,13 +69,17 @@ $ curl -s https://example.com/page.png | vertigo -cuts -
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-target-height` | `500` | Target slice height in pixels. A soft limit: a cut may land above its boundary and the shortfall carries into the next slice, so a slice can be up to `target-height + (target-height - min-height)` tall. |
-| `-min-height` | `400` | Minimum slice height in pixels. Also a soft limit: the final slice may be shorter. The rows between `min-height` and `target-height` form the window searched for a clean cut. |
+| `-min-height` | `400` | Minimum slice height in pixels; must be less than `target-height`. Also a soft limit: the final slice may be shorter. The rows between `min-height` and `target-height` form the window searched for a clean cut. |
 | `-format` | `jpg` | Output image format: `jpg`, `png`, or `tiff`. |
-| `-out` | | Directory to write slices to. Defaults to the directory of each input file. |
-| `-cuts` | `false` | Print the chosen cut rows as a JSON array instead of writing image slices. |
+| `-out` | | Directory to write slices to, created if missing. Defaults to the directory of each input file. |
+| `-cuts` | `false` | Print the chosen cut rows as a JSON array instead of writing image slices. An image that already fits in one slice prints `[]`. |
 | `-debug` | `false` | Also write `<input>-cuts.jpg`: the input image with a pink line drawn at each cut row. Its filename is printed to stderr. |
 | `-verbose` | `false` | Log image dimensions and timing to stderr. |
 | `-version` | `false` | Print version and build information, then exit. |
+
+Two inputs whose slices would get the same names (say `a/page.png` and
+`b/page.png` with `-out`) are not allowed to overwrite each other: the second
+is skipped with an error and the exit status is 1.
 
 ---
 
@@ -101,9 +105,11 @@ func slicePage(img image.Image) []image.Image {
 ```
 
 - `slicer.Default()` — a slicer with the default heights (500/400).
-- `slc.Slice(img)` — cut an image into slices; an image already within
-  `TargetHeight` comes back unchanged as a single slice.
-- `slc.Cuts(img)` — just the cut rows, if you want to inspect or store them.
+- `slc.Slice(img)` — cut an image into slices; an image that already fits
+  in one slice (up to `TargetHeight + (TargetHeight - MinHeight)` tall) comes
+  back unchanged as a single slice.
+- `slc.Cuts(img)` — just the cut rows, counted from the top edge of the
+  image, if you want to inspect or store them.
 - `slicer.SliceAt(img, cuts)` — cut at rows you choose yourself.
 
 The library depends only on the Go standard library.
@@ -121,7 +127,8 @@ The library depends only on the Go standard library.
 3. The Nth search window is the last `target-height - min-height` rows
    before row `N * target-height`. The cut lands at the middle of the
    biggest gap in the window; a window with no gap is cut at its bottom
-   boundary.
+   boundary. Cutting stops once the rows left below the last cut fit in one
+   slice, so the image never ends in a needless sliver.
 4. The image is cut at the chosen rows.
 
 ---

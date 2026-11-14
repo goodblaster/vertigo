@@ -1,9 +1,6 @@
 package slicer
 
-import (
-	"image"
-	"math"
-)
+import "image"
 
 // Heights (in pixels) used when none are configured.
 const (
@@ -21,8 +18,9 @@ type Slicer struct {
 	TargetHeight int
 
 	// MinHeight is the shortest a slice should be, also a soft limit: the
-	// final slice may be shorter. The rows between MinHeight and TargetHeight
-	// form the window searched for a clean cut.
+	// final slice may be shorter, though no cut is made once the remaining
+	// rows fit in one slice. The rows between MinHeight and TargetHeight form
+	// the window searched for a clean cut.
 	MinHeight int
 }
 
@@ -53,37 +51,43 @@ func (slc Slicer) windowHeight() int {
 	return slc.TargetHeight - slc.MinHeight
 }
 
-// Cuts returns the rows at which img should be cut, low to high, every one
-// strictly inside the image. It returns nil if the image already fits within
-// TargetHeight.
+// maxHeight is the tallest slice the heights allow: a full TargetHeight plus
+// the shortfall of a cut placed at the very top of its window.
+func (slc Slicer) maxHeight() int {
+	return slc.TargetHeight + slc.windowHeight()
+}
+
+// Cuts returns the rows at which img should be cut, counted from its top
+// edge, low to high, every one strictly inside the image. It returns nil if
+// the image already fits in a single slice, which may be as tall as
+// TargetHeight + (TargetHeight - MinHeight).
 func (slc Slicer) Cuts(img image.Image) []int {
 	// Sanitize so a zero-value or hand-built Slicer behaves like one from New.
 	slc = New(slc.TargetHeight, slc.MinHeight)
 
-	if img.Bounds().Dy() <= slc.TargetHeight {
+	height := img.Bounds().Dy()
+	if height <= slc.maxHeight() {
 		return nil
 	}
 
-	return slc.chooseCuts(img, slc.findGaps(canonical(img)))
+	return slc.chooseCuts(height, slc.findGaps(canonical(img)))
 }
 
 // Slice cuts img into horizontal slices at the rows returned by Cuts. An
-// image that already fits within TargetHeight comes back as a single slice.
+// image that already fits in a single slice comes back as one.
 func (slc Slicer) Slice(img image.Image) []image.Image {
 	return SliceAt(img, slc.Cuts(img))
 }
 
 // chooseCuts places one cut per search window, at the middle of the window's
-// biggest gap. A window with no gap is cut at its bottom boundary, and a cut
-// that would land at or past the bottom of the image is dropped: the rows
-// below the previous cut already fit in one slice.
-func (slc Slicer) chooseCuts(img image.Image, gaps []gap) []int {
-	height := img.Bounds().Dy()
-	n := int(math.Ceil(float64(height) / float64(slc.TargetHeight)))
+// biggest gap, in an image height rows tall. A window with no gap is cut at
+// its bottom boundary. Cutting stops as soon as the rows below the previous
+// cut fit in one slice, so the image never ends in a needless sliver.
+func (slc Slicer) chooseCuts(height int, gaps []gap) []int {
+	var cuts []int
 
-	cuts := make([]int, 0, n)
-	for i := range n {
-		hi := (i + 1) * slc.TargetHeight
+	prev := 0
+	for hi := slc.TargetHeight; height-prev > slc.maxHeight(); hi += slc.TargetHeight {
 		lo := hi - slc.windowHeight()
 
 		// Ties go to the lower gap, which yields taller slices.
@@ -96,9 +100,8 @@ func (slc Slicer) chooseCuts(img image.Image, gaps []gap) []int {
 			}
 		}
 
-		if best < height {
-			cuts = append(cuts, best)
-		}
+		cuts = append(cuts, best)
+		prev = best
 	}
 
 	return cuts

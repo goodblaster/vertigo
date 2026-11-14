@@ -6,19 +6,21 @@ import (
 )
 
 // SliceAt cuts img into horizontal slices at the given rows, which Slice
-// obtains from Cuts. Rows outside the image are clamped, and an empty cut
-// list yields the whole image as a single slice.
+// obtains from Cuts. Rows are counted from the top edge of img, whatever its
+// bounds, and must be in increasing order. Rows outside the image are
+// clamped, and an empty cut list yields the whole image as a single slice.
 func SliceAt(img image.Image, cuts []int) []image.Image {
+	b := img.Bounds()
 	slices := make([]image.Image, 0, len(cuts)+1)
 
 	last := 0
 	for _, cut := range cuts {
-		slices = append(slices, subImage(img, image.Rect(0, last, img.Bounds().Max.X, cut)))
+		slices = append(slices, subImage(img, image.Rect(b.Min.X, b.Min.Y+last, b.Max.X, b.Min.Y+cut)))
 		last = cut
 	}
 
-	if last < img.Bounds().Max.Y {
-		slices = append(slices, subImage(img, image.Rect(0, last, img.Bounds().Max.X, img.Bounds().Max.Y)))
+	if last < b.Dy() {
+		slices = append(slices, subImage(img, image.Rect(b.Min.X, b.Min.Y+last, b.Max.X, b.Max.Y)))
 	}
 
 	return slices

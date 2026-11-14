@@ -8,21 +8,15 @@ import "runtime/debug"
 //	-X github.com/goodblaster/vertigo/internal/build.Version=v1.2.3
 var (
 	Version string
-	Branch  string
 	Commit  string
 	Date    string
-	User    string
-	Host    string
 )
 
 // BuildInfo is a snapshot of the build-time variables.
 type BuildInfo struct {
 	Version string
-	Branch  string
 	Commit  string
 	Date    string
-	User    string
-	Host    string
 }
 
 // Info returns the build-time variables. Fields not set via -ldflags fall
@@ -31,11 +25,8 @@ type BuildInfo struct {
 func Info() BuildInfo {
 	info := BuildInfo{
 		Version: Version,
-		Branch:  Branch,
 		Commit:  Commit,
 		Date:    Date,
-		User:    User,
-		Host:    Host,
 	}
 
 	if bi, ok := debug.ReadBuildInfo(); ok {

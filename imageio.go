@@ -48,12 +48,29 @@ func encodeImage(w io.Writer, img image.Image, format string) error {
 
 // saveImage writes img to filename in the given format.
 func saveImage(img image.Image, filename, format string) error {
+	return writeFile(filename, func(w io.Writer) error {
+		return encodeImage(w, img, format)
+	})
+}
+
+// writeFile creates filename and fills it with encode. A file that could not
+// be written in full, including one whose close fails, is removed rather
+// than left behind truncated.
+func writeFile(filename string, encode func(io.Writer) error) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create %s: %w", filename, err)
 	}
-	defer f.Close()
-	return encodeImage(f, img, format)
+
+	err = encode(f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(filename)
+		return fmt.Errorf("failed to write %s: %w", filename, err)
+	}
+	return nil
 }
 
 // writeDebugImage saves a JPEG copy of img with a pink line drawn at each
@@ -73,10 +90,7 @@ func writeDebugImage(img image.Image, rows []int, filename string) error {
 		}
 	}
 
-	f, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create %s: %w", filename, err)
-	}
-	defer f.Close()
-	return jpeg.Encode(f, rgba, nil)
+	return writeFile(filename, func(w io.Writer) error {
+		return jpeg.Encode(w, rgba, nil)
+	})
 }
