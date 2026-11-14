@@ -3,6 +3,8 @@ package slicer_test
 import (
 	"image"
 	"image/color"
+	"image/draw"
+	"reflect"
 	"testing"
 
 	"github.com/goodblaster/vertigo/slicer"
@@ -64,15 +66,16 @@ func TestCutsProperties(t *testing.T) {
 
 func TestCutsShortImage(t *testing.T) {
 	slc := slicer.Default()
-	img := textImage(800, slc.TargetHeight)
+	// The tallest image that still fits in a single slice.
+	img := textImage(800, slc.TargetHeight+(slc.TargetHeight-slc.MinHeight))
 
 	if cuts := slc.Cuts(img); cuts != nil {
-		t.Errorf("Cuts() = %v for an image within TargetHeight, want nil", cuts)
+		t.Errorf("Cuts() = %v for an image that fits in one slice, want nil", cuts)
 	}
 
 	slices := slc.Slice(img)
 	if len(slices) != 1 {
-		t.Fatalf("Slice() returned %d slices for an image within TargetHeight, want 1", len(slices))
+		t.Fatalf("Slice() returned %d slices for an image that fits in one slice, want 1", len(slices))
 	}
 	if !slices[0].Bounds().Eq(img.Bounds()) {
 		t.Errorf("single slice bounds = %v, want %v", slices[0].Bounds(), img.Bounds())
@@ -86,14 +89,70 @@ func TestCutsPreferParagraphBreaks(t *testing.T) {
 	img := textImage(800, 1500, para1, para2)
 
 	cuts := slicer.New(500, 400).Cuts(img)
-	if len(cuts) != 3 {
-		t.Fatalf("Cuts() = %v, want 3 cuts for a 1500px image", cuts)
+	// The 550-odd rows below the second cut fit in one slice, so no third cut.
+	if len(cuts) != 2 {
+		t.Fatalf("Cuts() = %v, want 2 cuts for a 1500px image", cuts)
 	}
 	if cuts[0] < para1[0] || cuts[0] >= para1[1] {
 		t.Errorf("cut %d missed the paragraph break %v", cuts[0], para1)
 	}
 	if cuts[1] < para2[0] || cuts[1] >= para2[1] {
 		t.Errorf("cut %d missed the paragraph break %v", cuts[1], para2)
+	}
+}
+
+func TestCutsLeaveNoSliver(t *testing.T) {
+	slc := slicer.Default()
+	maxHeight := slc.TargetHeight + (slc.TargetHeight - slc.MinHeight)
+
+	// One row too tall for a single slice: exactly one cut, in the first window.
+	cuts := slc.Cuts(textImage(800, maxHeight+1))
+	if len(cuts) != 1 || cuts[0] <= slc.MinHeight || cuts[0] > slc.TargetHeight {
+		t.Errorf("Cuts() = %v, want one cut in (%d, %d]", cuts, slc.MinHeight, slc.TargetHeight)
+	}
+
+	// A remainder just past a TargetHeight boundary stays attached to the
+	// slice above it rather than becoming a sliver of its own.
+	img := textImage(800, 2*slc.TargetHeight+10)
+	slices := slc.Slice(img)
+	if last := slices[len(slices)-1].Bounds().Dy(); last < slc.MinHeight {
+		t.Errorf("final slice is %dpx tall, want at least %d", last, slc.MinHeight)
+	}
+}
+
+func TestCutsNonZeroOrigin(t *testing.T) {
+	// The same page, once at the origin and once embedded lower down inside a
+	// larger image, must be cut identically, with rows counted from its top.
+	para := [2]int{420, 450}
+	page := textImage(800, 1500, para)
+
+	big := image.NewRGBA(image.Rect(0, 0, 900, 3000))
+	offset := image.Pt(50, 1000)
+	embedded := page.Bounds().Add(offset)
+	draw.Draw(big, embedded, page, image.Point{}, draw.Src)
+	sub := big.SubImage(embedded)
+
+	slc := slicer.Default()
+	want := slc.Cuts(page)
+	got := slc.Cuts(sub)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Cuts() of an offset image = %v, want %v", got, want)
+	}
+
+	slices := slc.Slice(sub)
+	if len(slices) != len(want)+1 {
+		t.Fatalf("Slice() returned %d slices, want %d", len(slices), len(want)+1)
+	}
+	top := embedded.Min.Y
+	for i, s := range slices {
+		bottom := embedded.Max.Y
+		if i < len(want) {
+			bottom = embedded.Min.Y + want[i]
+		}
+		if wantRect := image.Rect(embedded.Min.X, top, embedded.Max.X, bottom); !s.Bounds().Eq(wantRect) {
+			t.Errorf("slice %d bounds = %v, want %v", i, s.Bounds(), wantRect)
+		}
+		top = bottom
 	}
 }
 

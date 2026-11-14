@@ -9,13 +9,15 @@
 // is placed at the middle of the biggest gap inside its search window,
 // [N*TargetHeight - (TargetHeight - MinHeight), N*TargetHeight]. The biggest
 // gap in a window is usually a paragraph break, so paragraphs tend to stay
-// whole. A window with no gap is cut at its bottom boundary, and a cut that
-// would land at or past the bottom of the image is dropped.
+// whole. A window with no gap is cut at its bottom boundary. Cutting stops
+// as soon as the rows below the previous cut fit in one slice.
 //
 // Both heights are soft limits. A cut may land anywhere in its window, and
 // the shortfall carries into the next slice, so a slice can be as tall as
-// TargetHeight + (TargetHeight - MinHeight); the final slice may be shorter
-// than MinHeight.
+// TargetHeight + (TargetHeight - MinHeight); an image no taller than that is
+// not cut at all. The final slice may be shorter than MinHeight.
+//
+// Cut rows are counted from the top edge of the image, whatever its bounds.
 //
 // Basic usage:
 //

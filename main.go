@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,10 +28,11 @@ func main() {
 	format := flag.String("format", "jpg",
 		"Output image format: jpg, png, or tiff.")
 	outDir := flag.String("out", "",
-		"Directory to write slices to. Defaults to the directory of each input file.")
+		"Directory to write slices to, created if missing. Defaults to the\n"+
+			"directory of each input file.")
 	cutsOnly := flag.Bool("cuts", false,
 		"Print the chosen cut rows as a JSON array instead of writing image slices.\n"+
-			"An image that already fits within target-height prints [].")
+			"An image that already fits in one slice prints [].")
 	debug := flag.Bool("debug", false,
 		"Also write <input>-cuts.jpg: a copy of the input image with a pink line\n"+
 			"drawn at each chosen cut row. Its filename is printed to stderr.")
@@ -56,11 +58,25 @@ func main() {
 		os.Exit(2)
 	}
 
-	slc := slicer.New(*targetHeight, *minHeight)
+	if err := validateHeights(*targetHeight, *minHeight); err != nil {
+		fmt.Fprintf(os.Stderr, "vertigo: %v\n", err)
+		os.Exit(2)
+	}
+
+	job := &job{
+		slc:      slicer.New(*targetHeight, *minHeight),
+		outDir:   *outDir,
+		format:   outFormat,
+		cutsOnly: *cutsOnly,
+		debug:    *debug,
+		verbose:  *verbose,
+		stdout:   os.Stdout,
+		stderr:   os.Stderr,
+	}
 
 	failed := false
 	for _, path := range flag.Args() {
-		if err := sliceFile(slc, path, *outDir, outFormat, *cutsOnly, *debug, *verbose); err != nil {
+		if err := job.sliceFile(path); err != nil {
 			fmt.Fprintf(os.Stderr, "vertigo: %s: %v\n", path, err)
 			failed = true
 		}
@@ -70,38 +86,91 @@ func main() {
 	}
 }
 
+// validateHeights rejects height flags the slicer would otherwise silently
+// replace with defaults.
+func validateHeights(targetHeight, minHeight int) error {
+	if targetHeight <= 0 {
+		return fmt.Errorf("-target-height must be positive, got %d", targetHeight)
+	}
+	if minHeight <= 0 {
+		return fmt.Errorf("-min-height must be positive, got %d", minHeight)
+	}
+	if minHeight >= targetHeight {
+		return fmt.Errorf("-min-height (%d) must be less than -target-height (%d)", minHeight, targetHeight)
+	}
+	return nil
+}
+
+// job holds the settings shared by every input of one run.
+type job struct {
+	slc      slicer.Slicer
+	outDir   string // empty: write next to each input
+	format   string
+	cutsOnly bool
+	debug    bool
+	verbose  bool
+	stdout   io.Writer
+	stderr   io.Writer
+
+	// claimed maps each output name prefix (directory plus base name) to the
+	// input that writes there, so two inputs never overwrite each other.
+	claimed map[string]string
+}
+
 // sliceFile slices one input image, printing each written filename (or, with
 // cutsOnly, the cut rows as JSON) to stdout. The path "-" reads the image
 // from standard input and names its slices stdin-000.<format>, ...
-func sliceFile(slc slicer.Slicer, path, outDir, format string, cutsOnly, debug, verbose bool) error {
-	img, err := loadImage(path)
-	if err != nil {
-		return err
-	}
-
+func (j *job) sliceFile(path string) error {
 	dir := filepath.Dir(path)
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if path == "-" {
 		dir = "."
 		base = "stdin"
 	}
-	if outDir != "" {
-		dir = outDir
+	if j.outDir != "" {
+		dir = j.outDir
+	}
+
+	writes := !j.cutsOnly || j.debug
+	if writes {
+		prefix := filepath.Join(dir, base)
+		if other, taken := j.claimed[prefix]; taken {
+			return fmt.Errorf("output names %s-* are already used by %s; skipped", prefix, other)
+		}
+		if j.claimed == nil {
+			j.claimed = map[string]string{}
+		}
+		j.claimed[prefix] = path
+	}
+
+	img, err := loadImage(path)
+	if err != nil {
+		return err
+	}
+
+	if writes && j.outDir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("failed to create output directory: %w", err)
+		}
 	}
 
 	start := time.Now()
-	cuts := slc.Cuts(img)
+	cuts := j.slc.Cuts(img)
+	if j.verbose {
+		b := img.Bounds()
+		fmt.Fprintf(j.stderr, "%s: %dx%d, %d slices, cuts found in %v\n", path, b.Dx(), b.Dy(), len(cuts)+1, time.Since(start))
+	}
 
-	if debug {
+	if j.debug {
 		name := filepath.Join(dir, base+"-cuts.jpg")
 		if err := writeDebugImage(img, cuts, name); err != nil {
 			return err
 		}
 		// To stderr: stdout carries only slice filenames, safe to pipe.
-		fmt.Fprintln(os.Stderr, name)
+		fmt.Fprintln(j.stderr, name)
 	}
 
-	if cutsOnly {
+	if j.cutsOnly {
 		if cuts == nil {
 			cuts = []int{}
 		}
@@ -109,22 +178,16 @@ func sliceFile(slc slicer.Slicer, path, outDir, format string, cutsOnly, debug, 
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(out))
+		fmt.Fprintln(j.stdout, string(out))
 		return nil
 	}
 
-	slices := slicer.SliceAt(img, cuts)
-	if verbose {
-		b := img.Bounds()
-		fmt.Fprintf(os.Stderr, "%s: %dx%d, %d slices in %v\n", path, b.Dx(), b.Dy(), len(slices), time.Since(start))
-	}
-
-	for i, im := range slices {
-		name := filepath.Join(dir, fmt.Sprintf("%s-%03d.%s", base, i, format))
-		if err := saveImage(im, name, format); err != nil {
+	for i, im := range slicer.SliceAt(img, cuts) {
+		name := filepath.Join(dir, fmt.Sprintf("%s-%03d.%s", base, i, j.format))
+		if err := saveImage(im, name, j.format); err != nil {
 			return err
 		}
-		fmt.Println(name)
+		fmt.Fprintln(j.stdout, name)
 	}
 	return nil
 }
